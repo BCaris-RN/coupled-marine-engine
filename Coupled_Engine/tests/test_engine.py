@@ -11,9 +11,11 @@ from engine import (
     StateIndex,
     UnifiedConfig,
     chlorophyll_chbr3_emission_flux_molecule_cm2_s,
+    hydroxide_concentration_mol_m3,
     initial_state,
     integrate_unified_state_vector,
     ph_scaled_hydrolysis_rate,
+    seawater_ion_product_total_scale,
     stratification_multiplier,
     unified_derivatives,
 )
@@ -47,14 +49,84 @@ def make_forcing(
     )
 
 
+def test_kw_millero_pure_water_baseline() -> None:
+    """Verify Millero S=0 baseline at 25 C."""
+    kw_pure = seawater_ion_product_total_scale(
+        temperature_k=298.15,
+        salinity_psu=0.0,
+    )
+    pkw_pure = -np.log10(kw_pure)
+
+    assert np.isclose(pkw_pure, 14.001161, atol=5.0e-4)
+
+
+def test_kw_self_consistent_marine_amplification() -> None:
+    """Verify self-consistent Millero S=35/S=0 OH amplification."""
+    oh_fresh = hydroxide_concentration_mol_m3(
+        ph_total=8.1,
+        temperature_k=298.15,
+        salinity_psu=0.0,
+        seawater_density_kg_m3=1025.0,
+    )
+    oh_marine = hydroxide_concentration_mol_m3(
+        ph_total=8.1,
+        temperature_k=298.15,
+        salinity_psu=35.0,
+        seawater_density_kg_m3=1025.0,
+    )
+
+    assert np.isclose(oh_marine / oh_fresh, 6.0805, atol=1.0e-3)
+
+
+def test_thermodynamic_bounds_safeguards() -> None:
+    """Reject values outside the seawater Kw empirical range."""
+    with np.testing.assert_raises_regex(
+        ValueError,
+        "Temperature out of seawater validity range",
+    ):
+        seawater_ion_product_total_scale(
+            temperature_k=350.0,
+            salinity_psu=35.0,
+        )
+
+    with np.testing.assert_raises_regex(
+        ValueError,
+        "Salinity out of seawater validity range",
+    ):
+        seawater_ion_product_total_scale(
+            temperature_k=298.15,
+            salinity_psu=50.0,
+        )
+
+
+def test_hydroxide_rejects_nonpositive_density() -> None:
+    with np.testing.assert_raises_regex(
+        ValueError,
+        "seawater density must be positive",
+    ):
+        hydroxide_concentration_mol_m3(
+            ph_total=8.1,
+            temperature_k=298.15,
+            salinity_psu=35.0,
+            seawater_density_kg_m3=0.0,
+        )
+
+
 def test_ph_shift_suppresses_hydroxide_hydrolysis_by_60_2_percent() -> None:
     config = UnifiedConfig()
     temperature_k = 288.15
+    salinity_psu = 35.0
 
-    acidic = ph_scaled_hydrolysis_rate(7.7, temperature_k, config)
+    acidic = ph_scaled_hydrolysis_rate(
+        7.7,
+        temperature_k,
+        salinity_psu,
+        config,
+    )
     reference = ph_scaled_hydrolysis_rate(
         config.chbr3_hydrolysis_reference_ph,
         temperature_k,
+        salinity_psu,
         config,
     )
 

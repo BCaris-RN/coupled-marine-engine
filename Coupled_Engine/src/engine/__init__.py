@@ -357,70 +357,72 @@ def chbr3_henry(temperature_k: float, config: UnifiedConfig) -> float:
     )
 
 
-def water_ion_product_mol2_l2(temperature_k: float) -> float:
-    """Return Kw(T) using the IAPWS 2024 equation at liquid density 1 g cm-3."""
-    if not 273.15 <= temperature_k <= 1273.15:
-        raise ValueError("water ion-product temperature must be 273.15-1273.15 K")
+def seawater_ion_product_total_scale(
+    temperature_k: float,
+    salinity_psu: float,
+) -> float:
+    """Return Millero (1995) Kw* on the Total pH Scale.
 
-    density_g_cm3 = 1.0
-    alpha_0 = -0.702132
-    alpha_1_k = 8681.05
-    alpha_2_k2 = -24_145.1
-    beta_0_cm3_g = 0.813876
-    beta_1_k_cm3_g = -51.4471
-    beta_2_cm6_g2 = -0.469920
-    coordination_number = 6.0
-    water_molar_mass_g_mol = 18.015268
+    Units are (mol kg-solution-1)^2. The empirical range is 273.15-318.15 K
+    and 0-45 PSU; CoupledForcing separately limits simulations to 0-40 PSU.
+    """
+    if not 273.15 <= temperature_k <= 318.15:
+        raise ValueError("Temperature out of seawater validity range (0-45 C)")
+    if not 0.0 <= salinity_psu <= 45.0:
+        raise ValueError("Salinity out of seawater validity range (0-45 PSU)")
 
-    z = density_g_cm3 * exp(
-        alpha_0
-        + alpha_1_k / temperature_k
-        + (
-            alpha_2_k2
-            / temperature_k**2
-            * density_g_cm3 ** (2.0 / 3.0)
+    ln_kw_pure = (
+        148.9652
+        - 13_847.26 / temperature_k
+        - 23.6521 * log(temperature_k)
+    )
+    sqrt_salinity = salinity_psu**0.5
+    ln_kw_salinity_terms = (
+        (
+            118.67 / temperature_k
+            - 5.977
+            + 1.0495 * log(temperature_k)
         )
+        * sqrt_salinity
+        - 0.01615 * salinity_psu
     )
-    ideal_gas_pkw = (
-        0.61415
-        + 48_251.33 / temperature_k
-        - 67_707.93 / temperature_k**2
-        + 10_102_100.0 / temperature_k**3
-    )
-    density_term = (
-        log(1.0 + z) / log(10.0)
-        - z
-        / (z + 1.0)
-        * density_g_cm3
-        * (
-            beta_0_cm3_g
-            + beta_1_k_cm3_g / temperature_k
-            + beta_2_cm6_g2 * density_g_cm3
-        )
-    )
-    pkw = (
-        -2.0 * coordination_number * density_term
-        + ideal_gas_pkw
-        + 2.0 * log(water_molar_mass_g_mol / 1000.0) / log(10.0)
-    )
-    return 10.0**-pkw
+    return exp(ln_kw_pure + ln_kw_salinity_terms)
 
 
-def hydroxide_concentration_mol_l(ph: float, temperature_k: float) -> float:
-    """Return liquid OH- from Kw(T) / H+."""
-    if not 0.0 <= ph <= 14.0:
-        raise ValueError("ph must remain within 0-14")
-    hydrogen_mol_l = 10.0**-ph
-    return water_ion_product_mol2_l2(temperature_k) / hydrogen_mol_l
+def hydroxide_concentration_mol_m3(
+    ph_total: float,
+    temperature_k: float,
+    salinity_psu: float,
+    seawater_density_kg_m3: float,
+) -> float:
+    """Return volumetric OH- from Total-scale pH and seawater Kw*."""
+    if not 0.0 <= ph_total <= 14.0:
+        raise ValueError("pH must remain within 0-14")
+    if seawater_density_kg_m3 <= 0.0:
+        raise ValueError("seawater density must be positive")
+
+    hydrogen_mol_kg = 10.0**-ph_total
+    hydroxide_mol_kg = (
+        seawater_ion_product_total_scale(temperature_k, salinity_psu)
+        / hydrogen_mol_kg
+    )
+    return hydroxide_mol_kg * seawater_density_kg_m3
 
 
 def ph_scaled_hydrolysis_rate(
-    ph: float,
+    ph_total: float,
     temperature_k: float,
+    salinity_psu: float,
     config: UnifiedConfig,
 ) -> float:
-    """Return first-order aqueous CHBr3 loss from Arrhenius OH- hydrolysis."""
-    hydroxide_mol_l = hydroxide_concentration_mol_l(ph, temperature_k)
+    """Return first-order aqueous CHBr3 loss from seawater OH- hydrolysis."""
+    hydroxide_mol_m3 = hydroxide_concentration_mol_m3(
+        ph_total,
+        temperature_k,
+        salinity_psu,
+        config.seawater_density_kg_m3,
+    )
+    hydroxide_mol_l = hydroxide_mol_m3 / 1000.0
     bimolecular_l_mol_s = (
         config.chbr3_hydrolysis_arrhenius_prefactor_l_mol_s
         * exp(
@@ -610,7 +612,12 @@ def unified_derivatives(
 
     chbr3, br, bro, ho2, oh, hobr, chbr3_aqueous = state[:7]
     rates = _kinetic_rates(air_temperature_k, config)
-    hydrolysis_s = ph_scaled_hydrolysis_rate(ph, sst_k, config)
+    hydrolysis_s = ph_scaled_hydrolysis_rate(
+        ph,
+        sst_k,
+        salinity_psu,
+        config,
+    )
     biological_emission_molecule_cm2_s = (
         chlorophyll_chbr3_emission_flux_molecule_cm2_s(
             chlorophyll_a,
@@ -850,13 +857,13 @@ __all__ = [
     "UnifiedResult",
     "chlorophyll_chbr3_emission_flux_molecule_cm2_s",
     "chbr3_henry",
-    "hydroxide_concentration_mol_l",
+    "hydroxide_concentration_mol_m3",
     "initial_state",
     "integrate_unified_state_vector",
     "ph_scaled_hydrolysis_rate",
+    "seawater_ion_product_total_scale",
     "stratification_multiplier",
     "unified_derivatives",
     "wanninkhof_kw_m_s",
     "warner_weiss_henry",
-    "water_ion_product_mol2_l2",
 ]
