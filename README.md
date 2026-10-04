@@ -1,5 +1,5 @@
-# coupled-marine-engine (in_your_dreams_2)
-Update for in_your_dreams: coupled thermodynamic engine; 17 state planetary
+# coupled-marine-engine (formerly in_your_dreams_2 renamed 10/04/2026)
+Update for in_your_dreams (archived): coupled thermodynamic engine; 17 state planetary
 Version 2 
 
 
